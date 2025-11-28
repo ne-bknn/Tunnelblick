@@ -167,7 +167,6 @@ struct Statistics {
     
     // External key proxy support (for --management-external-key and --management-external-cert)
     int             externalKeyProxySocket;  // File descriptor for persistent connection to external key proxy, or -1 if not connected
-    BOOL            externalKeyProxyAuthenticated; // True iff we have sent the password to the proxy
 }
 
 // PUBLIC METHODS:

@@ -272,7 +272,6 @@ TBPROPERTY(          NSMutableArray *,         messagesIfConnectionFails,       
 
         // Initialize external key proxy state
         externalKeyProxySocket = -1;
-        externalKeyProxyAuthenticated = NO;
     }
 
     return self;
@@ -4615,7 +4614,6 @@ static pthread_mutex_t lastStateMutex = PTHREAD_MUTEX_INITIALIZER;
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
     externalKeyProxySocket = sock;
-    externalKeyProxyAuthenticated = YES;
     [self addToLog: @"Connected to external key proxy"];
     return YES;
 }
@@ -4626,7 +4624,6 @@ static pthread_mutex_t lastStateMutex = PTHREAD_MUTEX_INITIALIZER;
     if (  externalKeyProxySocket >= 0  ) {
         close(externalKeyProxySocket);
         externalKeyProxySocket = -1;
-        externalKeyProxyAuthenticated = NO;
         TBLog(@"DB-AU", @"Disconnected from external key proxy");
     }
 }
