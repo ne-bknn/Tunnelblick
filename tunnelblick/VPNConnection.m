@@ -130,7 +130,6 @@ extern NSArray          * gTotalUnits;
 
 // External key proxy support (for --management-external-key and --management-external-cert)
 -(NSString *)       externalKeyProxySocketPath;
--(NSString *)       externalKeyProxyPasswordPath;
 -(BOOL)             connectToExternalKeyProxy;
 -(void)             disconnectFromExternalKeyProxy;
 -(NSString *)       sendCommandToExternalKeyProxy: (NSString *) command;
@@ -2943,6 +2942,16 @@ static pthread_mutex_t areConnectingMutex = PTHREAD_MUTEX_INITIALIZER;
 
     bitMask = bitMask | OPENVPNSTART_ON_BIG_SUR_OR_NEWER;
 
+    // Enable external key management if the proxy socket path is configured
+    NSString * externalKeySocketPath = [self externalKeyProxySocketPath];
+    if (  externalKeySocketPath  ) {
+        bitMask = bitMask | OPENVPNSTART_USE_EXTERNAL_KEY;
+        TBLog(@"DB-AU", @"External key proxy enabled with socket path: %@", externalKeySocketPath);
+        [self addToLog: [NSString stringWithFormat: @"External key management enabled, socket: %@", externalKeySocketPath]];
+    } else {
+        TBLog(@"DB-AU", @"External key proxy not configured (managementExternalKeyProxySocketPath is nil)");
+    }
+
     NSString * bitMaskString = [NSString stringWithFormat: @"%d", bitMask];
 
     NSString * leasewatchOptionsKey = [displayName stringByAppendingString: @"-leasewatchOptions"];
@@ -4545,23 +4554,17 @@ static pthread_mutex_t lastStateMutex = PTHREAD_MUTEX_INITIALIZER;
 //
 // Configuration (via forced preferences in /Library/Application Support/Tunnelblick/forced-preferences.plist):
 //   - managementExternalKeyProxySocketPath: Path to Unix socket
-//   - managementExternalKeyProxyPasswordPath: Path to password file (must be readable only by root)
 //
-// Protocol: Tunnelblick connects to the socket, sends the password, then forwards NEED-CERTIFICATE
-// and PK_SIGN/RSA_SIGN commands. The external program responds in OpenVPN management interface format.
+// Protocol: Tunnelblick connects to the socket and forwards NEED-CERTIFICATE and PK_SIGN/RSA_SIGN
+// commands. The external program responds in OpenVPN management interface format.
 
 -(NSString *) externalKeyProxySocketPath {
     // Returns the path to the external key proxy socket from forced preferences, or nil if not configured
     return [gTbDefaults stringForKey: @"managementExternalKeyProxySocketPath"];
 }
 
--(NSString *) externalKeyProxyPasswordPath {
-    // Returns the path to the password file from forced preferences, or nil if not configured
-    return [gTbDefaults stringForKey: @"managementExternalKeyProxyPasswordPath"];
-}
-
 -(BOOL) connectToExternalKeyProxy {
-    // Connects to the external key proxy socket and authenticates.
+    // Connects to the external key proxy socket.
     // Returns YES on success, NO on failure.
     // The connection is kept open for the duration of the VPN session.
 
@@ -4575,36 +4578,8 @@ static pthread_mutex_t lastStateMutex = PTHREAD_MUTEX_INITIALIZER;
         return NO;
     }
 
-    NSString * passwordPath = [self externalKeyProxyPasswordPath];
-
     [self addToLog: [NSString stringWithFormat: @"Connecting to external key proxy at %@", socketPath]];
     TBLog(@"DB-AU", @"Connecting to external key proxy socket '%@'", socketPath);
-
-    // Verify password file security if specified
-    if (  passwordPath  ) {
-        NSFileManager * fm = [NSFileManager defaultManager];
-        NSDictionary * attrs = [fm attributesOfItemAtPath: passwordPath error: nil];
-        if (  ! attrs  ) {
-            NSLog(@"connectToExternalKeyProxy: Password file does not exist: %@", passwordPath);
-            [self addToLog: @"External key proxy password file not found"];
-            return NO;
-        }
-
-        // Check that the file is owned by root and not readable by others
-        // (mimicking OpenVPN's security requirements for management password files)
-        NSNumber * ownerUID = [attrs objectForKey: NSFileOwnerAccountID];
-        NSNumber * permissions = [attrs objectForKey: NSFilePosixPermissions];
-        if (  [ownerUID unsignedIntValue] != 0  ) {
-            NSLog(@"connectToExternalKeyProxy: Password file must be owned by root: %@", passwordPath);
-            [self addToLog: @"External key proxy password file has incorrect ownership (must be owned by root)"];
-            return NO;
-        }
-        if (  ([permissions unsignedIntValue] & 0077) != 0  ) {
-            NSLog(@"connectToExternalKeyProxy: Password file must not be readable by group or others: %@", passwordPath);
-            [self addToLog: @"External key proxy password file has incorrect permissions (must not be readable by group or others)"];
-            return NO;
-        }
-    }
 
     // Create Unix domain socket
     struct sockaddr_un addr;
@@ -4640,36 +4615,6 @@ static pthread_mutex_t lastStateMutex = PTHREAD_MUTEX_INITIALIZER;
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
     externalKeyProxySocket = sock;
-    externalKeyProxyAuthenticated = NO;
-
-    // Send password if configured
-    if (  passwordPath  ) {
-        NSError * error = nil;
-        NSString * password = [NSString stringWithContentsOfFile: passwordPath encoding: NSUTF8StringEncoding error: &error];
-        if (  ! password  ) {
-            NSLog(@"connectToExternalKeyProxy: Failed to read password file %@: %@", passwordPath, error);
-            [self addToLog: @"Failed to read external key proxy password file"];
-            [self disconnectFromExternalKeyProxy];
-            return NO;
-        }
-
-        // Remove trailing newline if present
-        password = [password stringByTrimmingCharactersInSet: [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-
-        // Send password followed by newline
-        NSString * passwordWithNewline = [password stringByAppendingString: @"\n"];
-        NSData * passwordData = [passwordWithNewline dataUsingEncoding: NSUTF8StringEncoding];
-        ssize_t sent = send(externalKeyProxySocket, [passwordData bytes], [passwordData length], 0);
-        if (  sent < 0 || (NSUInteger)sent != [passwordData length]  ) {
-            NSLog(@"connectToExternalKeyProxy: Failed to send password: %s", strerror(errno));
-            [self addToLog: @"Failed to authenticate with external key proxy"];
-            [self disconnectFromExternalKeyProxy];
-            return NO;
-        }
-
-        TBLog(@"DB-AU", @"Sent password to external key proxy");
-    }
-
     externalKeyProxyAuthenticated = YES;
     [self addToLog: @"Connected to external key proxy"];
     return YES;
